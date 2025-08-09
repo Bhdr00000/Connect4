@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connect Four</title>
+<style>
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: linear-gradient(135deg, #1e3c72, #2a5298);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #fff;
+    margin: 0;
+    height: 100vh;
+    justify-content: center;
+  }
+  h1 {
+    margin-bottom: 0.5em;
+    user-select: none;
+  }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(7, 60px);
+    grid-template-rows: repeat(6, 60px);
+    gap: 8px;
+    background-color: #004080;
+    padding: 12px;
+    border-radius: 12px;
+    box-shadow: 0 0 15px #003366;
+    position: relative;
+  }
+  .cell {
+    width: 60px;
+    height: 60px;
+    background: #cfd8dc;
+    border-radius: 50%;
+    box-shadow: inset 0 3px 6px #a0a0a0;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    position: relative;
+    overflow: visible;
+  }
+  .cell.red {
+    background: radial-gradient(circle at center, #ff4d4d, #b22222);
+    box-shadow: 0 0 8px #ff4d4d;
+  }
+  .cell.yellow {
+    background: radial-gradient(circle at center, #ffec3d, #b59b0e);
+    box-shadow: 0 0 8px #ffec3d;
+  }
+  #status {
+    margin-top: 20px;
+    font-size: 1.25em;
+    min-height: 1.5em;
+    user-select: none;
+  }
+  button {
+    margin-top: 15px;
+    background-color: #2a5298;
+    border: none;
+    color: white;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 1em;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.3s ease;
+  }
+  button:hover {
+    background-color: #1e3c72;
+  }
+
+  /* Falling animation */
+  @keyframes fall {
+    0% {
+      transform: translateY(-300%);
+      opacity: 0.7;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  /* Highlight animation on winning discs */
+  @keyframes glowMove {
+    0% {
+      box-shadow:
+        0 0 8px 2px rgba(255, 255, 255, 0.7),
+        inset 0 0 10px 2px rgba(255, 255, 255, 0.7);
+    }
+    50% {
+      box-shadow:
+        0 0 16px 6px rgba(255, 255, 255, 1),
+        inset 0 0 20px 6px rgba(255, 255, 255, 1);
+    }
+    100% {
+      box-shadow:
+        0 0 8px 2px rgba(255, 255, 255, 0.7),
+        inset 0 0 10px 2px rgba(255, 255, 255, 0.7);
+    }
+  }
+
+  .falling {
+    animation: fall 0.4s ease forwards;
+  }
+
+  .winner {
+    animation: glowMove 2s ease infinite;
+    position: relative;
+    z-index: 1;
+  }
+</style>
+</head>
+<body>
+<h1>Connect Four</h1>
+<div id="board" aria-label="Connect Four board" role="grid"></div>
+<div id="status" aria-live="polite"></div>
+<button id="restart">Restart Game</button>
+
+<script>
+(() => {
+  const ROWS = 6;
+  const COLS = 7;
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('status');
+  const restartBtn = document.getElementById('restart');
+
+  const board = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+
+  let currentPlayer = 1; // 1=red, 2=yellow
+  let gameOver = false;
+  let winningCells = [];
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const cell = document.createElement('div');
+      cell.classList.add('cell');
+      cell.setAttribute('role', 'gridcell');
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+      cell.addEventListener('click', () => {
+        if (gameOver) return;
+        playColumn(c);
+      });
+      boardEl.appendChild(cell);
+    }
+  }
+
+  function playColumn(col) {
+    for (let row = ROWS - 1; row >= 0; row--) {
+      if (board[row][col] === 0) {
+        board[row][col] = currentPlayer;
+        updateCell(row, col, true);
+        if (checkWin(row, col)) {
+          statusEl.textContent = `${playerName(currentPlayer)} wins! 🎉`;
+          gameOver = true;
+          highlightWinningCells();
+        } else if (isBoardFull()) {
+          statusEl.textContent = "It's a tie!";
+          gameOver = true;
+        } else {
+          currentPlayer = 3 - currentPlayer;
+          statusEl.textContent = `${playerName(currentPlayer)}'s turn`;
+        }
+        return;
+      }
+    }
+  }
+
+  function updateCell(row, col, animate = false) {
+    const index = row * COLS + col;
+    const cell = boardEl.children[index];
+    cell.classList.remove('red', 'yellow', 'falling', 'winner');
+    if (board[row][col] === 1) cell.classList.add('red');
+    else if (board[row][col] === 2) cell.classList.add('yellow');
+    if (animate) {
+      cell.classList.add('falling');
+      cell.addEventListener('animationend', () => {
+        cell.classList.remove('falling');
+      }, { once: true });
+    }
+  }
+
+  function isBoardFull() {
+    return board.every(row => row.every(cell => cell !== 0));
+  }
+
+  function checkWin(row, col) {
+    const directions = [
+      [0, 1],
+      [1, 0],
+      [1, 1],
+      [1, -1],
+    ];
+    const player = board[row][col];
+    winningCells = [];
+
+    for (const [dr, dc] of directions) {
+      let count = 1;
+      let lineCells = [[row, col]];
+
+      count += countDirection(row, col, dr, dc, player, lineCells);
+      count += countDirection(row, col, -dr, -dc, player, lineCells);
+
+      if (count >= 4) {
+        // Filter lineCells to exactly 4 connected in a line (because countDirection counts all in both directions)
+        winningCells = filterConnectedFour(lineCells, dr, dc);
+        return true;
+      }
+    }
+    winningCells = [];
+    return false;
+  }
+
+  // Counts matching discs and collects their coordinates
+  function countDirection(r, c, dr, dc, player, lineCells) {
+    let count = 0;
+    let row = r + dr;
+    let col = c + dc;
+    while (
+      row >= 0 && row < ROWS &&
+      col >= 0 && col < COLS &&
+      board[row][col] === player
+    ) {
+      lineCells.push([row, col]);
+      count++;
+      row += dr;
+      col += dc;
+    }
+    return count;
+  }
+
+  // Filters exactly 4 discs in a row from the collected lineCells
+  function filterConnectedFour(cells, dr, dc) {
+    // Sort cells by row and col in the direction dr,dc
+    cells.sort((a, b) => {
+      if (dr !== 0) return (a[0] - b[0]) * dr;
+      return (a[1] - b[1]) * dc;
+    });
+    // The winning cells must be consecutive 4 discs in line
+    for (let i = 0; i <= cells.length - 4; i++) {
+      let group = cells.slice(i, i + 4);
+      if (areConsecutive(group, dr, dc)) return group;
+    }
+    // fallback, just first 4
+    return cells.slice(0, 4);
+  }
+
+  // Check if the group of cells are consecutive in the direction dr, dc
+  function areConsecutive(group, dr, dc) {
+    for (let i = 0; i < group.length - 1; i++) {
+      if (group[i + 1][0] !== group[i][0] + dr) return false;
+      if (group[i + 1][1] !== group[i][1] + dc) return false;
+    }
+    return true;
+  }
+
+  function highlightWinningCells() {
+    winningCells.forEach(([r, c]) => {
+      const idx = r * COLS + c;
+      boardEl.children[idx].classList.add('winner');
+    });
+  }
+
+  function playerName(player) {
+    return player === 1 ? 'Red' : 'Yellow';
+  }
+
+  function resetGame() {
+    winningCells = [];
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        board[r][c] = 0;
+        updateCell(r, c);
+      }
+    }
+    currentPlayer = 1;
+    gameOver = false;
+    statusEl.textContent = `${playerName(currentPlayer)}'s turn`;
+  }
+
+  restartBtn.addEventListener('click', resetGame);
+
+  statusEl.textContent = `${playerName(currentPlayer)}'s turn`;
+})();
+</script>
+</body>
+</html>
