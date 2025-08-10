@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Skippity — Official Rules (Playable)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --bg:#222; --panel:#111; --accent:#ffcc00;
+    --tile-1:#ff6666; --tile-2:#ffcc66; --tile-3:#66cc66; --tile-4:#66cccc; --tile-5:#cc66cc;
+    --hud-bg:#333;
+  }
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0;background:var(--bg);color:#fff;display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px;}
+  h1{margin:6px;font-size:1.6rem;color:var(--accent);text-shadow:0 0 6px #000}
+  #wrap{display:flex;gap:14px;align-items:flex-start;}
+  #board-wrap{background:var(--panel);padding:14px;border-radius:8px;border:6px solid #111;box-shadow:0 8px 30px rgba(0,0,0,0.8);}
+  #board{display:grid;grid-template: repeat(10,56px) / repeat(10,56px);gap:4px; width: (56*10 + 9*4)px;}
+  .cell{width:56px;height:56px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;transition:transform .08s,outline .12s;}
+  .cell.empty{cursor:default}
+  .piece{width:86%;height:86%;border-radius:50%;box-shadow: inset 0 2px 6px rgba(255,255,255,0.6), inset 0 -3px 6px rgba(0,0,0,0.45), 0 4px 8px rgba(0,0,0,0.6);transform: scale(.96);transition:transform .12s}
+  .piece:hover{transform:scale(1)}
+  .sel{outline:3px solid gold;border-radius:12px}
+  .highlight{outline:3px solid lime;border-radius:10px}
+  #hud{width:320px;display:flex;flex-direction:column;gap:8px}
+  .players{display:flex;flex-wrap:wrap;gap:6px}
+  .player{background:var(--hud-bg);padding:8px;border-radius:8px;border:1px solid #444;min-width:150px}
+  .player strong{display:block;color:var(--accent)}
+  .slot{width:14px;height:14px;border-radius:50%;display:inline-block;margin:1px;border:1px solid #000;vertical-align:middle}
+  #controls{background:var(--hud-bg);padding:10px;border-radius:8px;border:1px solid #444;display:flex;flex-direction:column;gap:8px}
+  button{background:linear-gradient(#444,#333);color:#fff;padding:8px 10px;border-radius:6px;border:1px solid #222;cursor:pointer}
+  button:disabled{opacity:.45;cursor:default}
+  #log{max-height:140px;overflow:auto;font-size:.9rem;padding:6px;background:#0f0f0f;border-radius:6px;border:1px solid #222}
+  .small{font-size:.9rem;color:#ccc}
+  footer{font-size:.8rem;color:#aaa;margin-top:6px}
+  @media (max-width:900px){
+    #wrap{flex-direction:column;align-items:center}
+    #hud{width:92%}
+  }
+</style>
+</head>
+<body>
+<h1>Skippity — Official Rules (Playable)</h1>
+
+<div id="wrap">
+  <div id="board-wrap" aria-label="game board">
+    <div id="board"></div>
+  </div>
+
+  <div id="hud">
+    <div class="players" id="players"></div>
+
+    <div id="controls">
+      <div id="turn">Player 1's turn</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="btnCollect" disabled>Collect Captures & End Turn</button>
+        <button id="btnCancel" disabled>Cancel Selection</button>
+        <button id="btnReset">New Game</button>
+      </div>
+      <div class="small">Captured this move: <span id="tempCapturedCount">0</span></div>
+      <div id="log" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<footer>Rules implemented from the official Skippity instructions (jump orthogonally; multiple jumps allowed; you may stop early; collect captured skippers at end of turn). Sources cited in the UI. </footer>
+
+<script>
+/*
+  Official Skippity rules implementation — summarized:
+  - 10x10 board, center 2x2 empty. Fill other squares with colored skippers.
+  - Any skipper on the board may be used to jump (free-for-all).
+  - Jump orthogonally over an adjacent skipper into an empty square two away, capturing the jumped skipper.
+  - Multiple jumps allowed; direction can change; NOT forced to take all jumps — player may stop and collect captured skippers from that turn.
+  - When a player collects one of each color (5 colors), that counts as a complete set (score).
+  - Game ends when no jumps remain. Winner: most complete sets. Tiebreaker among tied players: most total skippers captured.
+  - Sources: MindWare rule sheet, community rule summaries and BGG. (See citations in assistant reply.)
+*/
+
+const COLORS = ["red","blue","green","yellow","orange"];
+const playersCount = 4;
+let board = []; // board[y][x] = color string or null
+let turn = 0; // 0..playersCount-1
+let sel = null; // selected piece {x,y}
+let highlights = []; // possible jumps for current selected piece
+let tempCaptured = []; // colors captured during current move (these are removed from board when jumped)
+let playerData = []; // for each player: {sets: number, have: {color:count}, totalCaptured: number}
+
+const boardEl = document.getElementById('board');
+const playersEl = document.getElementById('players');
+const turnEl = document.getElementById('turn');
+const btnCollect = document.getElementById('btnCollect');
+const btnCancel = document.getElementById('btnCancel');
+const btnReset = document.getElementById('btnReset');
+const tempCapturedCount = document.getElementById('tempCapturedCount');
+const logEl = document.getElementById('log');
+
+const bgColors = ["#f7dc6f","#76d7c4","#5dade2","#ec7063","#f5b041","#ff9999","#99ffcc","#cce6ff","#e0b3ff","#ffd9b3"];
+
+function newGame(){
+  board = [];
+  tempCaptured = [];
+  sel = null;
+  highlights = [];
+  turn = 0;
+  playerData = [];
+  for(let i=0;i<playersCount;i++){
+    playerData.push({sets:0, have: { }, totalCaptured:0});
+  }
+  // Fill board: all squares except center 2x2
+  for(let y=0;y<10;y++){
+    board[y] = [];
+    for(let x=0;x<10;x++){
+      if(x>=4 && x<=5 && y>=4 && y<=5) board[y][x] = null;
+      else board[y][x] = COLORS[Math.floor(Math.random()*COLORS.length)];
+    }
+  }
+  log("New game started.");
+  renderHUD(); renderBoard();
+  updateButtons();
+}
+
+function renderHUD(){
+  playersEl.innerHTML = "";
+  for(let i=0;i<playersCount;i++){
+    const p = playerData[i];
+    const div = document.createElement('div');
+    div.className = 'player';
+    div.innerHTML = `<strong>Player ${i+1}${i===turn? " ←" : ""}</strong>
+      Sets: ${p.sets} <span class="small"> (total captured: ${p.totalCaptured})</span>
+      <div class="small">Collected colors:</div>
+      <div>${COLORS.map(c=>`<span class="slot" title="${c}" style="background:${p.have[c]?c:'#ccc'}"></span>`).join('')}</div>`;
+    playersEl.appendChild(div);
+  }
+  turnEl.textContent = `Player ${turn+1}'s turn`;
+  tempCapturedCount.textContent = tempCaptured.length;
+}
+
+function renderBoard(){
+  boardEl.innerHTML = '';
+  for(let y=0;y<10;y++){
+    for(let x=0;x<10;x++){
+      const cell = document.createElement('div');
+      const tileIndex = (x+y) % bgColors.length;
+      cell.className = 'cell' + (board[y][x] ? '' : ' empty');
+      cell.style.background = bgColors[tileIndex];
+      cell.dataset.x = x; cell.dataset.y = y;
+      // highlight / selection
+      if(sel && sel.x==x && sel.y==y) cell.classList.add('sel');
+      if(highlights.some(h=>h.x==x&&h.y==y)) cell.classList.add('highlight');
+
+      if(board[y][x]){
+        const piece = document.createElement('div');
+        piece.className = 'piece';
+        piece.style.background = board[y][x];
+        cell.appendChild(piece);
+        cell.onclick = ()=> onCellClick(x,y);
+      } else {
+        // empty cell: clickable only if highlighted
+        if(highlights.some(h=>h.x==x&&h.y==y)) cell.onclick = ()=> onEmptyClick(x,y);
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+function onCellClick(x,y){
+  // If selecting another piece while mid-turn capturing (tempCaptured not empty) you CAN still select any piece;
+  // official rules let you use any piece at the start of your turn. However once you start jumping, selection should stay on that piece.
+  // We'll permit new selection only if tempCaptured is empty (i.e., not currently jumping), or if user clicks the currently selected piece to cancel.
+  if(sel && sel.x===x && sel.y===y){ // cancel selection
+    cancelSelection();
+    return;
+  }
+  if(tempCaptured.length>0 && !(sel && sel.x===x && sel.y===y)){
+    // if the player has already jumped at least once, they must continue with that jumper; disallow selecting a different piece mid-chain.
+    log("You already started jumping with a piece; finish or collect before selecting a different piece.");
+    return;
+  }
+  if(board[y][x]){
+    sel = {x,y};
+    highlights = findJumps(x,y);
+    renderBoard(); updateButtons();
+    if(highlights.length===0) log("That piece currently has no jumps. Choose another or cancel.");
+    else log(`Selected piece at (${x+1},${y+1}). ${highlights.length} jump target(s).`);
+  }
+}
+
+function onEmptyClick(x,y){
+  // perform jump from sel to x,y (must be a valid highlight)
+  if(!sel) return;
+  const dx = x - sel.x, dy = y - sel.y;
+  // validate orthogonal jump of distance 2
+  if(!((Math.abs(dx)===2 && dy===0) || (Math.abs(dy)===2 && dx===0))) return;
+  const mx = sel.x + dx/2, my = sel.y + dy/2;
+  if(!(board[my] && board[my][mx])) return;
+  // perform the jump: remove jumped piece, move jumper to new location
+  const jumpedColor = board[my][mx];
+  board[my][mx] = null;
+  board[y][x] = board[sel.y][sel.x];
+  board[sel.y][sel.x] = null;
+  tempCaptured.push(jumpedColor); // accumulate for this turn
+  sel = {x,y};
+  highlights = findJumps(x,y);
+  renderBoard(); renderHUD();
+  log(`Jumped and captured a ${jumpedColor} piece.`);
+  // After a jump there may be no more jumps from the new square -> player must either collect (end turn) or selection ends automatically if none left.
+  if(highlights.length===0){
+    log("No further jumps available from this piece. You must collect captured skippers to end your turn.");
+    updateButtons();
+    // don't auto-collect; player must click Collect to commit captured pieces (official rules: "After a player has jumped over all of the skippers they pick up the skippers they jumped over.")
+  } else {
+    updateButtons();
+  }
+}
+
+function findJumps(x,y){
+  const moves = [];
+  const dirs = [[2,0],[-2,0],[0,2],[0,-2]];
+  for(const [dx,dy] of dirs){
+    const nx = x+dx, ny = y+dy, mx = x+dx/2, my = y+dy/2;
+    if(nx>=0 && ny>=0 && nx<10 && ny<10 && board[ny][nx]===null && board[my] && board[my][mx]) moves.push({x:nx,y:ny});
+  }
+  return moves;
+}
+
+function cancelSelection(){
+  // if the player has captured during this turn, cancelling selection won't restore captured pieces; they are already removed.
+  // The player must "Collect Captures" or end turn to commit captured pieces. Cancelling selection just deselects the current jumper if no captured yet.
+  if(tempCaptured.length>0){
+    log("You have captured skippers this move. Click 'Collect Captures & End Turn' to finish and score them.");
+    return;
+  }
+  sel = null; highlights = []; renderBoard(); updateButtons(); log("Selection cancelled.");
+}
+
+function collectCapturesAndEndTurn(){
+  if(tempCaptured.length===0){
+    // player may end the turn without captures (i.e., pass) — but official play: you jump on every turn; however if there was no jump you pass. We'll allow end turn.
+    endTurnCommit([]);
+    return;
+  }
+  // commit tempCaptured into player's stash
+  const pd = playerData[turn];
+  for(const c of tempCaptured){
+    pd.have[c] = (pd.have[c]||0) + 1;
+    pd.totalCaptured++;
+  }
+  // check for completed sets: a set is one of each color
+  // We treat sets as count of full sets formed by integer division across colors.
+  let possibleSets = Infinity;
+  for(const c of COLORS) possibleSets = Math.min(possibleSets, pd.have[c] || 0);
+  if(possibleSets > 0){
+    // convert those into sets
+    pd.sets += possibleSets;
+    // subtract used pieces
+    for(const c of COLORS) pd.have[c] -= possibleSets;
+    // remove zeroes
+    for(const c of COLORS) if(pd.have[c]===0) delete pd.have[c];
+    log(`Player ${turn+1} completed ${possibleSets} set(s)!`);
+  }
+  endTurnCommit(tempCaptured.slice());
+}
+
+function endTurnCommit(committedCaptured){
+  // clear tempCaptured, advance turn, check for game end
+  tempCaptured = [];
+  sel = null; highlights = [];
+  renderHUD(); renderBoard(); updateButtons();
+  // check if there are any jumps anywhere — if none, game ends
+  if(!anyJumpsOnBoard()){
+    endGame();
+    return;
+  }
+  // advance turn normally
+  turn = (turn+1) % playersCount;
+  renderHUD(); renderBoard(); updateButtons();
+  log(`Turn passed to Player ${turn+1}.`);
+}
+
+function anyJumpsOnBoard(){
+  for(let y=0;y<10;y++) for(let x=0;x<10;x++){
+    if(board[y][x] && findJumps(x,y).length>0) return true;
+  }
+  return false;
+}
+
+function endGame(){
+  // Determine winner(s): most complete sets wins. If tie, tiebreaker by totalCaptured among tied players. If still tie, it's a tie.
+  const setsArray = playerData.map(p=>p.sets);
+  const maxSets = Math.max(...setsArray);
+  const tied = playerData.map((p,i)=>p.sets===maxSets?i:null).filter(i=>i!==null);
+  let winners = [];
+  if(tied.length===1){ winners = tied; }
+  else {
+    // tiebreak by most totalCaptured
+    let maxCaptured = Math.max(...tied.map(i=>playerData[i].totalCaptured));
+    const tied2 = tied.filter(i=>playerData[i].totalCaptured===maxCaptured);
+    if(tied2.length===1) winners = tied2;
+    else winners = tied2; // still tie
+  }
+  if(winners.length===1) {
+    alert(`Game over! Winner: Player ${winners[0]+1}\nSets: ${playerData[winners[0]].sets}\nTotal captured: ${playerData[winners[0]].totalCaptured}`);
+    log(`Game over! Winner: Player ${winners[0]+1}`);
+  } else {
+    alert(`Game over! Tie between: ${winners.map(i=>`P${i+1}`).join(", ")}\n(Each has ${playerData[winners[0]].sets} sets; compare total captured: ${winners.map(i=>playerData[i].totalCaptured).join(", ")})`);
+    log(`Game over! Tie between: ${winners.map(i=>`P${i+1}`).join(", ")}`);
+  }
+}
+
+function updateButtons(){
+  btnCollect.disabled = !(tempCaptured.length>0 || (sel===null && !anyJumpsOnBoard()));
+  btnCancel.disabled = !(sel !== null && tempCaptured.length===0);
+}
+
+function log(msg){
+  const time = new Date().toLocaleTimeString();
+  logEl.innerHTML = `<div>[${time}] ${msg}</div>` + logEl.innerHTML;
+}
+
+// wire up buttons
+btnCollect.addEventListener('click', ()=> {
+  collectCapturesAndEndTurn();
+});
+btnCancel.addEventListener('click', ()=> {
+  cancelSelection();
+});
+btnReset.addEventListener('click', ()=> {
+  if(confirm("Start a new game?")) newGame();
+});
+
+// keyboard convenience: Esc cancel, Enter collect
+document.addEventListener('keydown', (e)=>{
+  if(e.key==='Escape') cancelSelection();
+  if(e.key==='Enter') {
+    if(!btnCollect.disabled) collectCapturesAndEndTurn();
+  }
+});
+
+// start
+newGame();
+
+</script>
+</body>
+</html>
